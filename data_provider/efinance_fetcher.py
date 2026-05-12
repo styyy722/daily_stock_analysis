@@ -1023,20 +1023,35 @@ class EfinanceFetcher(BaseFetcher):
             if change_col not in df.columns or name_col not in df.columns:
                 return None
 
+            _EXTRA = [
+                ('换手率',  'turnover_rate',    float),
+                ('成交额',  'amount',           float),
+                ('上涨家数', 'up_count',         int),
+                ('下跌家数', 'down_count',       int),
+                ('涨停家数', 'limit_up_count',   int),
+            ]
+
+            def _row_to_sector(row: pd.Series) -> dict:
+                d: dict = {'name': str(row[name_col]), 'change_pct': float(row[change_col])}
+                for src, dst, cast in _EXTRA:
+                    if src not in row.index:
+                        continue
+                    try:
+                        fv = float(row[src])
+                        if not pd.isna(fv):
+                            d[dst] = cast(fv)
+                    except (TypeError, ValueError):
+                        pass
+                return d
+
             df[change_col] = pd.to_numeric(df[change_col], errors='coerce')
             df = df.dropna(subset=[change_col])
             top = df.nlargest(n, change_col)
             bottom = df.nsmallest(n, change_col)
-
-            top_sectors = [
-                {'name': str(row[name_col]), 'change_pct': float(row[change_col])}
-                for _, row in top.iterrows()
-            ]
-            bottom_sectors = [
-                {'name': str(row[name_col]), 'change_pct': float(row[change_col])}
-                for _, row in bottom.iterrows()
-            ]
-            return top_sectors, bottom_sectors
+            return (
+                [_row_to_sector(row) for _, row in top.iterrows()],
+                [_row_to_sector(row) for _, row in bottom.iterrows()],
+            )
         except Exception as e:
             logger.error(f"[efinance] 获取板块排行失败: {e}")
             return None

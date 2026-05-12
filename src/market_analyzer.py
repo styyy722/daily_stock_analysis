@@ -685,46 +685,68 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
         return "\n".join(lines)
 
     def _build_sector_block(self, overview: MarketOverview) -> str:
-        """Build sector ranking block."""
+        """Build sector ranking block as a rich list with available extra fields."""
         if not overview.top_sectors and not overview.bottom_sectors:
             return ""
-        lines = []
+
+        en = self._get_review_language() == "en"
+
+        def _detail(s: dict) -> str:
+            parts: list = []
+            up = s.get('up_count')
+            dn = s.get('down_count')
+            if up is not None and dn is not None:
+                parts.append(f"↑{int(up)}/↓{int(dn)}")
+            elif up is not None:
+                parts.append(f"↑{int(up)}")
+            lu = s.get('limit_up_count')
+            if lu is not None and int(lu) > 0:
+                parts.append(("Limit-up " if en else "涨停") + str(int(lu)))
+            tr = s.get('turnover_rate')
+            if tr is not None:
+                parts.append(("T/O " if en else "换手") + f"{float(tr):.1f}%")
+            amt = s.get('amount')
+            if amt is not None:
+                try:
+                    av = float(amt)
+                    # EM returns 元; values ≥ 1e8 are likely 元, < 1e6 likely already 亿
+                    if av >= 1e8:
+                        av /= 1e8
+                    label = "Vol " if en else "成交"
+                    parts.append(f"{label}{av:.0f}{'bn' if en else '亿'}")
+                except (TypeError, ValueError):
+                    pass
+            lead = s.get('lead_stock')
+            lead_pct = s.get('lead_stock_pct')
+            if lead:
+                suffix = f"({float(lead_pct):+.1f}%)" if lead_pct is not None else ""
+                parts.append(("Lead:" if en else "领涨:") + lead + suffix)
+            net = s.get('net_buy_wan')
+            if net is not None and not lead:  # tushare path, show net flow if no lead stock
+                label = "Net " if en else "净流入"
+                parts.append(f"{label}{float(net)/1e4:.1f}{'bn' if en else '亿'}")
+            return "> " + " | ".join(parts) if parts else ""
+
+        def _render_group(sectors: list, heading: str) -> list:
+            out = [f"#### {heading}"]
+            for rank, s in enumerate(sectors[:5], 1):
+                pct = self._format_signed_pct(s.get('change_pct'))
+                name = s.get('name', '-')
+                out.append(f"**{rank}. {name}** `{pct}`")
+                detail = _detail(s)
+                if detail:
+                    out.append(detail)
+            return out
+
+        lines: list = []
         if overview.top_sectors:
-            if self._get_review_language() == "en":
-                lines.extend([
-                    "#### Leading Sectors",
-                    "| Rank | Sector | Change |",
-                    "|------|--------|--------|",
-                ])
-            else:
-                lines.extend([
-                    "#### 领涨板块 Top 5",
-                    "| 排名 | 板块 | 涨跌幅 |",
-                    "|------|------|--------|",
-                ])
-            for rank, sector in enumerate(overview.top_sectors[:5], 1):
-                lines.append(
-                    f"| {rank} | {sector.get('name', '-')} | {self._format_signed_pct(sector.get('change_pct'))} |"
-                )
+            heading = "Leading Sectors" if en else "领涨板块 Top 5"
+            lines.extend(_render_group(overview.top_sectors, heading))
         if overview.bottom_sectors:
             if lines:
                 lines.append("")
-            if self._get_review_language() == "en":
-                lines.extend([
-                    "#### Lagging Sectors",
-                    "| Rank | Sector | Change |",
-                    "|------|--------|--------|",
-                ])
-            else:
-                lines.extend([
-                    "#### 领跌板块 Top 5",
-                    "| 排名 | 板块 | 涨跌幅 |",
-                    "|------|------|--------|",
-                ])
-            for rank, sector in enumerate(overview.bottom_sectors[:5], 1):
-                lines.append(
-                    f"| {rank} | {sector.get('name', '-')} | {self._format_signed_pct(sector.get('change_pct'))} |"
-                )
+            heading = "Lagging Sectors" if en else "领跌板块 Top 5"
+            lines.extend(_render_group(overview.bottom_sectors, heading))
         return "\n".join(lines)
 
     def _build_news_block(self, news: List) -> str:

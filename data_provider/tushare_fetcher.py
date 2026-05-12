@@ -1056,23 +1056,43 @@ class TushareFetcher(BaseFetcher):
         2. 东财接口 (ts.pro_api().moneyflow_ind_dc)
         注意：每个接口的行业分类和板块定义不同，会导致结果两者不一致
         """
+        # (source_col, dest_key, cast)
+        _TS_EXTRA = [
+            ('lead_stock',       'lead_stock',      str),
+            ('pct_change_stock', 'lead_stock_pct',  float),
+            # net_buy_amount is in 万元; store raw, display layer converts
+            ('net_buy_amount',   'net_buy_wan',     float),
+        ]
+
+        def _row_to_sector(row: pd.Series, name_col: str, change_col: str) -> dict:
+            d: dict = {'name': str(row[name_col]), 'change_pct': float(row[change_col])}
+            for src, dst, cast in _TS_EXTRA:
+                if src not in row.index:
+                    continue
+                val = row[src]
+                try:
+                    if cast is str:
+                        sv = str(val).strip()
+                        if sv and sv.lower() not in ('nan', 'none', ''):
+                            d[dst] = sv
+                    else:
+                        fv = float(val)
+                        if not pd.isna(fv):
+                            d[dst] = fv
+                except (TypeError, ValueError):
+                    pass
+            return d
+
         def _get_rank_top_n(df: pd.DataFrame, change_col: str, industry_name: str, n: int) -> Tuple[list, list]:
+            df = df.copy()
             df[change_col] = pd.to_numeric(df[change_col], errors='coerce')
             df = df.dropna(subset=[change_col])
-
-            # 涨幅前n
             top = df.nlargest(n, change_col)
-            top_sectors = [
-                {'name': row[industry_name], 'change_pct': row[change_col]}
-                for _, row in top.iterrows()
-            ]
-
             bottom = df.nsmallest(n, change_col)
-            bottom_sectors = [
-                {'name': row[industry_name], 'change_pct': row[change_col]}
-                for _, row in bottom.iterrows()
-            ]
-            return top_sectors, bottom_sectors
+            return (
+                [_row_to_sector(row, industry_name, change_col) for _, row in top.iterrows()],
+                [_row_to_sector(row, industry_name, change_col) for _, row in bottom.iterrows()],
+            )
 
         # 15:30之后才有当天数据
         start_date = self.get_trade_time(early_time='00:00', late_time='15:30')

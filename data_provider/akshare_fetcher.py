@@ -1755,24 +1755,53 @@ class AkshareFetcher(BaseFetcher):
         """
         import akshare as ak
 
+        # Column aliases: (source_col, dest_key, cast)
+        _EXTRA_COLS = [
+            ('上涨家数',        'up_count',         int),
+            ('下跌家数',        'down_count',        int),
+            ('涨停家数',        'limit_up_count',    int),
+            ('跌停家数',        'limit_down_count',  int),
+            ('换手率',          'turnover_rate',     float),
+            ('成交额',          'amount',            float),
+            ('领涨股票',        'lead_stock',        str),
+            ('领涨股票-涨跌幅', 'lead_stock_pct',    float),
+            # Sina column aliases
+            ('涨家数',          'up_count',          int),
+            ('跌家数',          'down_count',        int),
+        ]
+
+        def _row_to_sector(row: pd.Series, name_col: str, change_col: str) -> dict:
+            d: dict = {'name': str(row[name_col]), 'change_pct': float(row[change_col])}
+            seen: set = set()
+            for src, dst, cast in _EXTRA_COLS:
+                if dst in seen or src not in row.index:
+                    continue
+                val = row[src]
+                try:
+                    if cast is str:
+                        sv = str(val).strip()
+                        if sv and sv.lower() not in ('nan', 'none', ''):
+                            d[dst] = sv
+                    else:
+                        fv = float(val)
+                        if not pd.isna(fv):
+                            d[dst] = cast(fv)
+                    seen.add(dst)
+                except (TypeError, ValueError):
+                    pass
+            return d
+
         def _get_rank_top_n(df: pd.DataFrame, change_col: str, industry_name: str, n: int) -> Tuple[list, list]:
+            df = df.copy()
             df[change_col] = pd.to_numeric(df[change_col], errors='coerce')
             df = df.dropna(subset=[change_col])
-
-            # 涨幅前n
             top = df.nlargest(n, change_col)
-            top_sectors = [
-                {'name': row[industry_name], 'change_pct': row[change_col]}
-                for _, row in top.iterrows()
-            ]
-
             bottom = df.nsmallest(n, change_col)
-            bottom_sectors = [
-                {'name': row[industry_name], 'change_pct': row[change_col]}
-                for _, row in bottom.iterrows()
-            ]
-            return top_sectors, bottom_sectors
-        
+            return (
+                [_row_to_sector(row, industry_name, change_col) for _, row in top.iterrows()],
+                [_row_to_sector(row, industry_name, change_col) for _, row in bottom.iterrows()],
+            )
+
         # 优先东财接口
         try:
             self._set_random_user_agent()

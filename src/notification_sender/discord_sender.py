@@ -11,7 +11,7 @@ from typing import Optional
 import requests
 
 from src.config import Config
-from src.formatters import chunk_content_by_max_words
+from src.formatters import chunk_content_by_max_words, format_discord_markdown
 
 
 logger = logging.getLogger(__name__)
@@ -53,7 +53,7 @@ class DiscordSender:
         """
         # 分割内容，避免单条消息超过 Discord 限制
         try:
-            chunks = chunk_content_by_max_words(content, self._discord_max_words)
+            chunks = chunk_content_by_max_words(format_discord_markdown(content), self._discord_max_words)
         except ValueError as e:
             logger.error(f"分割 Discord 消息失败: {e}, 尝试整段发送。")
             chunks = [content]

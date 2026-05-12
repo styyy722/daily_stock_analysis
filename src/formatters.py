@@ -8,6 +8,7 @@
 """
 
 import re
+import unicodedata
 from typing import List
 
 import markdown2
@@ -491,6 +492,118 @@ def format_feishu_markdown(content: str) -> str:
         _flush_table_rows(table_buffer, lines)
 
     return "\n".join(lines).strip()
+
+
+def _east_asian_display_width(s: str) -> int:
+    """Return visual display width of string, counting CJK chars as 2."""
+    w = 0
+    for c in s:
+        eaw = unicodedata.east_asian_width(c)
+        w += 2 if eaw in ('W', 'F') else 1
+    return w
+
+
+_EMOJI_RE = re.compile(
+    r'[\U0001F300-\U0001F9FF\U00002600-\U000027BF\U0000FE00-\U0000FEFF]+'
+)
+
+
+def _discord_flush_table(buffer: List[str]) -> List[str]:
+    """Convert a buffered markdown table to Discord-renderable lines.
+
+    Wide tables (4+ cols) become ``` code blocks with aligned columns.
+    Narrow tables (≤3 cols) become bullet list lines.
+    """
+    sep_re = re.compile(r'^\s*\|?\s*[-:]+\s*(\|\s*[-:]+\s*)+\|?\s*$')
+
+    rows: List[List[str]] = []
+    for raw in buffer:
+        if sep_re.match(raw.strip()):
+            continue
+        cells = [c.strip() for c in raw.strip().strip('|').split('|')]
+        while cells and not cells[0]:
+            cells.pop(0)
+        while cells and not cells[-1]:
+            cells.pop()
+        if cells:
+            rows.append(cells)
+
+    if not rows:
+        return []
+
+    num_cols = max(len(r) for r in rows)
+    header = rows[0]
+    data_rows = rows[1:] if len(rows) > 1 else []
+
+    if not data_rows:
+        return []
+
+    # Wide table (4+ cols): aligned code block
+    if num_cols >= 4:
+        def clean(s: str) -> str:
+            return _EMOJI_RE.sub('', s).strip()
+
+        all_rows = [[clean(c) for c in r] for r in [header] + data_rows]
+        col_widths = [
+            max(_east_asian_display_width(r[i] if i < len(r) else '') for r in all_rows) + 1
+            for i in range(num_cols)
+        ]
+
+        def fmt_row(row: List[str]) -> str:
+            parts = []
+            for i in range(num_cols):
+                cell = row[i] if i < len(row) else ''
+                pad = max(0, col_widths[i] - _east_asian_display_width(cell))
+                parts.append(cell + ' ' * pad)
+            return ' '.join(parts).rstrip()
+
+        lines = ['```']
+        lines.append(fmt_row(all_rows[0]))
+        lines.append('─' * min(sum(col_widths) + num_cols - 1, 62))
+        for row in all_rows[1:]:
+            lines.append(fmt_row(row))
+        lines.append('```')
+        return lines
+
+    # Narrow table (≤3 cols): bullet list
+    is_rank = bool(data_rows) and all(r[0].strip().isdigit() for r in data_rows if r)
+    out: List[str] = []
+    for row in data_rows:
+        while len(row) < num_cols:
+            row.append('')
+        if is_rank and num_cols == 3:
+            out.append(f"`{row[0]}.` **{row[1]}** `{row[2]}`")
+        elif num_cols == 2:
+            out.append(f"**{row[0]}**: {row[1]}")
+        else:  # 3 cols, non-rank
+            out.append(f"• **{row[0]}** | {row[1]} | {row[2]}")
+    return out
+
+
+def format_discord_markdown(content: str) -> str:
+    """Convert Markdown to Discord-friendly format.
+
+    Discord doesn't render | table | syntax. Converts:
+    - Wide tables (4+ cols) → ``` code block with aligned columns
+    - Narrow tables (≤3 cols) → compact bullet list lines
+    """
+    lines = content.splitlines()
+    result: List[str] = []
+    table_buffer: List[str] = []
+
+    for line in lines:
+        if line.strip().startswith('|'):
+            table_buffer.append(line)
+        else:
+            if table_buffer:
+                result.extend(_discord_flush_table(table_buffer))
+                table_buffer = []
+            result.append(line)
+
+    if table_buffer:
+        result.extend(_discord_flush_table(table_buffer))
+
+    return '\n'.join(result)
 
 
 def _chunk_by_separators(content: str) -> tuple[list[str], str]:
